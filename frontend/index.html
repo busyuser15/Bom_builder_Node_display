@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOM Builder Frontend</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>BOM Builder</h1>
+        <p>Upload an Excel BOM file and preview the parsed rows from the Python backend.</p>
+        <form id="upload-form">
+          <label for="bom-file">Select BOM Excel file</label>
+          <input id="bom-file" name="file" type="file" accept=".xlsx,.xlsm" required />
+          <button type="submit">Upload and Parse</button>
+        </form>
+        <p id="status">Backend status: <span id="backend-status">unknown</span></p>
+      </section>
+
+      <section class="panel">
+        <h2>Result</h2>
+        <pre id="result">No data loaded yet.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

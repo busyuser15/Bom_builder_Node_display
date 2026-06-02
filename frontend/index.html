@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BOM Builder - CK International</title>
+    <link href="https://fonts.googleapis.com/css?family=Inter:400,500,600,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/themes/default/style.min.css" />
   </head>
@@ -22,7 +23,7 @@
       </section>
 
       <section class="panel">
-        <h2>🌳 BOM Hierarchy</h2>
+        <h2>BOM Hierarchy</h2>
         <div class="controls">
           <div class="search-controls">
             <label for="search-type" style="margin: 0;">Search by:</label>
@@ -46,7 +47,28 @@
         <h2>✏️ Part Details</h2>
         <div id="part-details">Select a part from the tree to view and edit details</div>
       </section>
+
+      <section class="panel" id="actions-section">
+        <h2>📤 Actions</h2>
+        <div id="action-buttons" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
+      </section>
     </main>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>⚙️ Settings</h2>
+          <button class="modal-close" onclick="closeSettings()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>Settings coming soon!</p>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn-close" onclick="closeSettings()">Close</button>
+        </div>
+      </div>
+    </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/jstree.min.js"></script>

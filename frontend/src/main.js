@@ -43,36 +43,56 @@ function convertToJsTreeFormat(data) {
 }
 
 function initializeTree(data) {
-  if (treeInstance) {
-    treeInstance.destroy();
+  // Destroy old tree if it exists
+  if ($('#tree-container').jstree()) {
+    $('#tree-container').jstree('destroy');
   }
+  treeInstance = null;
 
   const jsTreeData = convertToJsTreeFormat(data);
+  console.log("jsTreeData after conversion:", jsTreeData);
 
-  $('#tree-container').jstree({
-    'core': {
-      'data': jsTreeData,
-      'themes': {
-        'icons': false
+  try {
+    // Initialize jstree with direct data
+    $('#tree-container').jstree({
+      'core': {
+        'data': jsTreeData,
+        'multiple': false,
+        'themes': {
+          'icons': false
+        }
+      },
+      'plugins': ['search']
+    });
+
+    // Get the instance after initialization and force redraw
+    setTimeout(() => {
+      treeInstance = $('#tree-container').jstree(true);
+      console.log("jstree instance retrieved:", treeInstance);
+      console.log("jstree root nodes:", treeInstance.get_node('#').children);
+      
+      // Force redraw and open all nodes
+      treeInstance.redraw(true);
+      treeInstance.open_all();
+      console.log("Tree nodes forced to open and redraw");
+    }, 100);
+
+    // Bind events
+    $('#tree-container').off('select_node.jstree').on('select_node.jstree', function (e, data) {
+      displayPartDetails(data.node);
+    });
+
+    $('#tree-container').off('dblclick.jstree').on('dblclick.jstree', function (e) {
+      if (treeInstance) {
+        const node = treeInstance.get_node(e.target);
+        if (node && node.data && node.data[0] !== undefined) {
+          editDescription(node);
+        }
       }
-    },
-    'plugins': ['search']
-  });
-
-  treeInstance = $('#tree-container').jstree(true);
-
-  // Bind selection event
-  $('#tree-container').on('select_node.jstree', function (e, data) {
-    displayPartDetails(data.node);
-  });
-
-  // Bind double-click for editing
-  $('#tree-container').on('dblclick.jstree', function (e) {
-    const node = treeInstance.get_node(e.target);
-    if (node && node.data && node.data[0] !== undefined) {
-      editDescription(node);
-    }
-  });
+    });
+  } catch (error) {
+    console.error("Error initializing jstree:", error);
+  }
 }
 
 function displayPartDetails(node) {
@@ -313,12 +333,26 @@ async function uploadFile(event) {
     console.log("compValues:", compValues);
 
     if (treeData && treeData.length > 0) {
-      initializeTree(treeData);
-      partDetails.innerHTML = "Select a part to view details";
+      console.log("Initializing tree with", treeData.length, "root nodes");
+      try {
+        initializeTree(treeData);
+        console.log("Tree initialization complete");
+        partDetails.innerHTML = "Select a part to view details";
+        
+        // Scroll to tree container
+        setTimeout(() => {
+          treeContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 200);
+      } catch (treeError) {
+        console.error("Error in tree initialization:", treeError);
+        treeContainer.innerHTML = `Error initializing tree: ${treeError.message}`;
+      }
     } else {
+      console.error("No tree data or empty treeData:", treeData);
       treeContainer.innerHTML = `No BOM data found in the file. treeData: ${JSON.stringify(treeData)}`;
     }
   } catch (error) {
+    console.error("Upload error:", error);
     treeContainer.innerHTML = `Request failed: ${error.message}`;
   }
 }
@@ -342,8 +376,9 @@ window.updateDescription = updateDescription;
 window.saveDescriptionPersist = saveDescriptionPersist;
 window.updateCheckbox = updateCheckbox;
 window.uploadChanges = uploadChanges;
-
-// Upload changes function
+window.uploadToBC = uploadToBC;
+window.openSettings = openSettings;
+window.closeSettings = closeSettings;
 async function uploadChanges() {
   if (Object.keys(changes.descriptions).length === 0 && 
       changes.phantom.length === 0 && 
@@ -386,42 +421,145 @@ async function uploadChanges() {
   }
 }
 
-// Create upload button and add it to the DOM
-const uploadChangesBtn = document.createElement("button");
-uploadChangesBtn.textContent = "💾 Upload Changes";
-uploadChangesBtn.className = "upload-changes-btn";
-uploadChangesBtn.style.marginTop = "1rem";
-uploadChangesBtn.addEventListener("click", uploadChanges);
+// Upload to Business Central function
+async function uploadToBC() {
+  if (!treeData) {
+    alert("No BOM data loaded. Please upload and parse a file first.");
+    return;
+  }
 
-// Add the button after the file upload form
-form.parentElement.appendChild(uploadChangesBtn);
-
-// Update status display with colors
-function updateStatusDisplay() {
-  const hasChanges = Object.keys(changes.descriptions).length > 0 || 
-                     changes.phantom.length > 0 || 
-                     changes.treatAsPart.length > 0;
+  // Confirm before uploading
+  const confirmUpload = confirm(
+    "This will upload the BOM data to Business Central. " +
+    "Make sure all changes have been made. Continue?"
+  );
   
-  if (hasChanges) {
-    uploadChangesBtn.textContent = `💾 Upload Changes (${Object.keys(changes.descriptions).length + changes.phantom.length + changes.treatAsPart.length} changes)`;
-    uploadChangesBtn.style.background = "linear-gradient(135deg, #f6ad55 0%, #ed8936 100%)";
-  } else {
-    uploadChangesBtn.textContent = "💾 Upload Changes";
-    uploadChangesBtn.style.background = "linear-gradient(135deg, #48bb78 0%, #38a169 100%)";
+  if (!confirmUpload) {
+    return;
+  }
+
+  try {
+    // Extract flat BOM data from tree structure
+    function flattenTree(nodes, parentPartNumber = null) {
+      const flattened = [];
+      nodes.forEach((node, index) => {
+        const nodeData = node.data || [];
+        // Create BOM entry
+        const bomEntry = {
+          "LEVEL": nodeData[9] || 0, // Level from node data
+          "PARENT PART NUMBER": parentPartNumber,
+          "COMPONENT PART NUMBER": node.text,
+          "STATUS": nodeData[1] || "",
+          "TYPE": nodeData[2] || "PART",
+          "QTY": nodeData[8] || 1,
+          "Attrib:SPAREPART": nodeData[6] || "",
+          "Attrib:SPAREPART SEVERITY": nodeData[7] || "",
+          "Attrib:SPARESLISTQTY": nodeData[8] || ""
+        };
+        flattened.push(bomEntry);
+        
+        // Recursively flatten children
+        if (node.children && node.children.length > 0) {
+          flattened.push(...flattenTree(node.children, node.text));
+        }
+      });
+      return flattened;
+    }
+
+    const jsTreeData = convertToJsTreeFormat(treeData);
+    const bomDataFlattened = flattenTree(jsTreeData);
+
+    console.log(`Uploading ${bomDataFlattened.length} items to Business Central...`);
+
+    uploadToBCBtn.disabled = true;
+    uploadToBCBtn.textContent = "⏳ Uploading to BC...";
+
+    const response = await fetch(`${BACKEND_URL}/api/upload-to-bc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ bom_data: bomDataFlattened })
+    });
+
+    const result = await response.json();
+
+    if (response.ok) {
+      alert(
+        `✅ Upload Successful!\n\n` +
+        `Total items: ${result.total_items}\n` +
+        `Batches sent: ${result.batches_sent}\n\n` +
+        `Check the backend console for detailed responses.`
+      );
+    } else {
+      alert(`❌ Upload failed: ${result.error || result.message}`);
+    }
+  } catch (error) {
+    alert(`❌ Upload to Business Central failed: ${error.message}`);
+    console.error("Upload error:", error);
+  } finally {
+    uploadToBCBtn.disabled = false;
+    uploadToBCBtn.textContent = "📤 Upload to Business Central";
   }
 }
 
-// Call updateStatusDisplay after each change
-const originalUpdateDescription = updateDescription;
-window.updateDescription = function(...args) {
-  originalUpdateDescription(...args);
-  updateStatusDisplay();
-};
+// Create upload button and add it to the DOM
+const uploadToBCBtn = document.createElement("button");
+uploadToBCBtn.textContent = "📤 Upload to Business Central";
+uploadToBCBtn.className = "upload-bc-btn";
+uploadToBCBtn.style.marginTop = "0";
+uploadToBCBtn.style.background = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
+uploadToBCBtn.style.color = "white";
+uploadToBCBtn.style.padding = "0.75rem 1.5rem";
+uploadToBCBtn.style.border = "none";
+uploadToBCBtn.style.borderRadius = "0.375rem";
+uploadToBCBtn.style.cursor = "pointer";
+uploadToBCBtn.style.fontSize = "1rem";
+uploadToBCBtn.style.fontWeight = "600";
+uploadToBCBtn.addEventListener("click", uploadToBC);
 
-const originalUpdateCheckbox = updateCheckbox;
-window.updateCheckbox = function(...args) {
-  originalUpdateCheckbox(...args);
-  updateStatusDisplay();
-};
+// Create settings button
+const settingsBtn = document.createElement("button");
+settingsBtn.textContent = "⚙️ Settings";
+settingsBtn.className = "settings-btn";
+settingsBtn.style.marginTop = "0";
+settingsBtn.style.background = "linear-gradient(135deg, #718096 0%, #4a5568 100%)";
+settingsBtn.style.color = "white";
+settingsBtn.style.padding = "0.75rem 1.5rem";
+settingsBtn.style.border = "none";
+settingsBtn.style.borderRadius = "0.375rem";
+settingsBtn.style.cursor = "pointer";
+settingsBtn.style.fontSize = "1rem";
+settingsBtn.style.fontWeight = "600";
+settingsBtn.addEventListener("click", openSettings);
+
+// Add the buttons to the action section
+const actionButtonsContainer = document.querySelector("#action-buttons");
+actionButtonsContainer.appendChild(uploadToBCBtn);
+actionButtonsContainer.appendChild(settingsBtn);
+
+// Update status display with colors
+function updateStatusDisplay() {
+  // Placeholder for future status display logic
+}
+
+// Settings function
+function openSettings() {
+  const modal = document.getElementById('settings-modal');
+  modal.style.display = 'block';
+}
+
+function closeSettings() {
+  const modal = document.getElementById('settings-modal');
+  modal.style.display = 'none';
+}
+
+// Close modal when clicking outside of it
+window.addEventListener('click', function(event) {
+  const modal = document.getElementById('settings-modal');
+  if (event.target === modal) {
+    modal.style.display = 'none';
+  }
+});
 
 fetchHealth();

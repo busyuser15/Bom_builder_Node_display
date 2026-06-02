@@ -1,0 +1,32 @@
+{
+  "id": "152ccf93-8946-4427-bc59-da8a1011c454",
+  "name": "Actual Bom API",
+  "publisher": "Breannan Conlon",
+  "version": "1.0.0.0",
+  "brief": "",
+  "description": "",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "platform": "1.0.0.4",
+  "application": "25.0.0.0",
+  "idRanges": [
+    {
+      "from": 50180,
+      "to": 50200
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "14.3",
+  "features": [
+    "NoImplicitWith"
+  ]
+}

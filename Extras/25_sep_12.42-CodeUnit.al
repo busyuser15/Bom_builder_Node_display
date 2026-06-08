@@ -16,37 +16,44 @@ codeunit 50182 "Codeunit Boms"
         holder: text;
         linenum: Integer;
     begin
+        // Build unique parent list from staging table
+        BuffPar.Clear();
         BomEntry.Reset();
         if BomEntry.FindSet() then
             repeat
-                par := BomEntry.PARENT_PART_NUMBER;
-                if BuffPar.Contains(par) = false then begin
-                    buffpar.Add(par);
-                    HeaderToLine.set(par, 5)
+                par := StrTrim(BomEntry.PARENT_PART_NUMBER);
+                if par <> '' and not BuffPar.Contains(par) then begin
+                    BuffPar.Add(par);
                 end;
-            until bomentry.next() = 0;
-        foreach ParentNo in buffpar do begin
-            if BOMHeader.Get(ParentNo) then begin
-                BOMLine.Reset();
-                BOMLine.SetRange("Production BOM No.", ParentNo);
-                if BOMLine.FindSet() then
-                    repeat
-                        if Present.ContainsKey(ParentNo) = true then begin
-                            linenum := HeaderToLine.Get(ParentNo);
-                            linenum := linenum + 5;
-                            HeaderToLine.set(ParentNo, linenum);
-                            ListOfLines := Present.Get(BOMHeader."No.");
-                            ListOfLines.Add(BomLine."No.");
-                            Present.Set(BomHeader."No.", ListOfLines);
-                        end
+            until BomEntry.Next() = 0;
 
-                        else begin
-                            HeaderToLine.set(ParentNo, (linenum + 5));
-                            clear(ListOfLines);
-                            ListOfLines.Add(BomLine."No.");
-                            Present.Set(BomHeader."No.", ListOfLines)
-                        end;
-                    until BOMLine.Next() = 0;
+        // For each parent, scan existing Production BOM Lines and populate Present and HeaderToLine
+        foreach ParentNo in BuffPar do begin
+            if BomHeader.Get(ParentNo) then begin
+                // collect all existing component numbers for this header
+                ListOfLines := ListOf[Text]();
+                BomLine.Reset();
+                BomLine.SetRange("Production BOM No.", ParentNo);
+                // track highest line number for next insertion
+                linenum := 0;
+                if BomLine.FindSet() then
+                    repeat
+                        ListOfLines.Add(BomLine."No.");
+                        if BomLine."Line No." > linenum then
+                            linenum := BomLine."Line No.";
+                    until BomLine.Next() = 0;
+
+                // store the next available line (highest found + 5) or default to 5
+                if linenum = 0 then
+                    HeaderToLine.Set(ParentNo, 5)
+                else
+                    HeaderToLine.Set(ParentNo, linenum + 5);
+
+                if ListOfLines.Count() > 0 then
+                    Present.Set(ParentNo, ListOfLines);
+            end else begin
+                // no header exists yet, initialize next line to 5
+                HeaderToLine.Set(ParentNo, 5);
             end;
         end;
     end;
@@ -79,25 +86,24 @@ codeunit 50182 "Codeunit Boms"
         UnitOfMeasure: Record "Unit of Measure";
     begin
         Item.Reset();
-        if Item.Get(CompNum) and bomentry.get(CompNum) then begin
+        if Item.Get(CompNum) and bomentry.Get(CompNum) then begin
             HeaderTable.Init();
             HeaderTable."No." := CompNum;
             if StrLen(bomentry.Description) < 50 then begin
                 Headertable."Search Name" := bomentry.Description;
                 HeaderTable.Description := bomentry.Description;
-            end
-            else begin
+            end else begin
                 Headertable."Search Name" := CopyStr(bomentry.Description, 1, 49) + '*';
                 HeaderTable.Description := CopyStr(bomentry.Description, 1, 49) + '*';
             end;
             Headertable."Unit of Measure Code" := 'TEST BC';
-            //Headertable."Description 2" := bomentry.Description;
 
-            if HeaderTable.Insert() then begin
-                item.get(CompNum);
-                Item."Production BOM No." := Headertable."No."; //wrong?
+            HeaderTable.Insert();
+            // persist production BOM number on the item
+            if Item.Get(CompNum) then begin
+                Item."Production BOM No." := HeaderTable."No.";
+                Item.Modify();
             end;
-
         end;
     end;
 
@@ -116,49 +122,44 @@ codeunit 50182 "Codeunit Boms"
     begin
         Item.Reset();
 
-        if Item.Get(CompNum) and bomentry.get(CompNum) and Headertable.get(ParentNum) then begin
+        if Item.Get(CompNum) and bomentry.Get(CompNum) and Headertable.Get(ParentNum) then begin
+            // Determine next available Line No. for this header safely by finding the max existing
+            linetable.Reset();
+            linetable.SetRange("Production BOM No.", ParentNum);
+            linenum := 0;
+            if linetable.FindSet() then
+                repeat
+                    if linetable."Line No." > linenum then
+                        linenum := linetable."Line No.";
+                until linetable.Next() = 0;
 
-            linenum := HeaderToLine.Get(ParentNum) + 5;
+            linenum := linenum + 5;
 
-            if DoesLineExist(CompNum, linenum, ParentNum) = false then begin
-                //Message(CompNum + ' item doesnt exist creating it');
+            if not DoesLineExist(CompNum, ParentNum) then begin
                 linetable.Init();
                 linetable."No." := CompNum;
                 linetable."Production BOM No." := ParentNum;
-                if StrLen(bomentry.Description) < 100 then begin
-                    linetable.Description := bomentry.Description;
-                end
-                else begin
+                if StrLen(bomentry.Description) < 100 then
+                    linetable.Description := bomentry.Description
+                else
                     linetable.Description := CopyStr(bomentry.Description, 1, 99) + '*';
-                end;
 
                 linetable.Quantity := bomentry.QTY;
-
-                linetable.Reset();
-                linetable.SetRange("Production BOM No.", ParentNum);
-
-                // keep incrementing by 5 until a free Line No. is found
-                while linetable.Get(ParentNum, '', LineNum) do begin
-                    LineNum := LineNum + 5;
-                end;
-
-                //linenum := linenum + 5;
                 linetable."Line No." := linenum;
-                HeaderToLine.Set(ParentNum, linenum);
-                linetable.Insert()
-            end
-            else begin
-                //message(CompNum + ' Match, updating line');
-                linetable.reset();
+                HeaderToLine.Set(ParentNum, linenum + 5);
+                linetable.Insert();
+            end else begin
+                linetable.Reset();
                 linetable.SetRange("No.", CompNum);
                 linetable.SetRange("Production BOM No.", ParentNum);
                 if linetable.FindFirst() then begin
-                    linetable.Validate("Quantity per", BomEntry.QTY);
+                    linetable.Validate("Quantity per", bomentry.QTY);
                     linetable.Modify(true);
-                    ListOfLines := Present.Get(ParentNum);
-                    ListOfLines.Remove(CompNum);
-                    Present.set(ParentNum, ListOfLines);
-
+                    if Present.ContainsKey(ParentNum) then begin
+                        ListOfLines := Present.Get(ParentNum);
+                        ListOfLines.Remove(CompNum);
+                        Present.Set(ParentNum, ListOfLines);
+                    end;
                 end;
             end;
         end;
@@ -170,16 +171,14 @@ codeunit 50182 "Codeunit Boms"
         LineList: Record "Production BOM Line";
         LineExists: Boolean;
     begin
-        LineList.reset();
+        LineList.Reset();
         LineList.SetRange("No.", CompNum);
-        //LineList.SetRange("Line No.", LineNum);
         LineList.SetRange("Production BOM No.", ProdBomNo);
-        if LineList.FindFirst() then begin
-            LineExists := true;
-        end else begin
-            LineExists := false
-        end;
-        exit(LineExists)
+        if LineList.FindFirst() then
+            LineExists := true
+        else
+            LineExists := false;
+        exit(LineExists);
     end;
 
     procedure RemoveBOMLines()

@@ -138,7 +138,7 @@ def post_request_to_bc(bom_data):
             dictionary = {
                 "method": "POST",
                 "id": str(i + 1),  # unique ID per request in the batch
-                "url": "companies(AED5BD5F-977B-ED11-9989-6045BD0CAE02)/bomEntries7",
+                "url": "companies(AED5BD5F-977B-ED11-9989-6045BD0CAE02)/bomEntries7", # CHANGE URL
                 "headers": {
                     "Content-Type": "application/json"
                 },
@@ -156,7 +156,7 @@ def post_request_to_bc(bom_data):
                 "https://api.businesscentral.dynamics.com/v2.0/697d6604-5c29-4ca0-9dea-9db421a85492/CKIN01_UAT_131224/api/ck/integration/v2.0/$batch",
                 headers=headers,
                 json=itembody,
-                timeout=30
+                timeout=60
             )
 
             print(f"Batch response status: {resp.status_code}")

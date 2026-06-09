@@ -107,10 +107,11 @@ def post_request_to_bc(bom_data):
     Returns:
         Dictionary with response status and details
     """
-    # Hard-coded credentials (for local testing; do NOT commit real secrets)
-    CLIENT_ID = "21e698d9-1eab-42be-beb7-76096e1af3db"
-    CLIENT_SECRET = "5MN8Q~nVFMWB9ImKBDslluO66eDj8u.WzHSMEdc~"
-    TENANT_ID = "697d6604-5c29-4ca0-9dea-9db421a85492"
+    # Credentials: prefer environment variables; fall back to hardcoded test values if missing
+    # WARNING: The defaults below are for local testing only. Do NOT commit real secrets.
+    CLIENT_ID = os.environ.get("BC_CLIENT_ID", "c3bfac0f-d6fe-4b1a-a621-065686d1c7f6")
+    CLIENT_SECRET = os.environ.get("BC_CLIENT_SECRET", "5MN8Q~nVFMWB9lmKBDslluO66eDj8u.WzHSMEdc~")
+    TENANT_ID = os.environ.get("BC_TENANT_ID", BC_TENANT_ID)
 
     if not all([CLIENT_ID, CLIENT_SECRET, TENANT_ID]):
         return {
@@ -130,37 +131,18 @@ def post_request_to_bc(bom_data):
     try:
         # Send request for token
         token_resp = requests.post(TOKEN_URL, data=token_data)
-        # If token endpoint returns an error, include the body in logs for debugging
-        if not token_resp.ok:
-            try:
-                err_body = token_resp.json()
-            except Exception:
-                err_body = token_resp.text
-            app.logger.error(f"Token endpoint returned status {token_resp.status_code}: {err_body}")
-            return {"status": "error", "message": f"Token request failed: {token_resp.status_code}", "details": err_body}
-
         token_resp.raise_for_status()
         access_token = token_resp.json()["access_token"]
     except Exception as exc:
-        app.logger.error(f"Failed to get access token: {str(exc)}")
+        print(f"Failed to get access token: {str(exc)}")
         return {"status": "error", "message": f"Token request failed: {str(exc)}"}
 
     # Resolve company GUID if not provided
     company_guid = BC_COMPANY_GUID
     if not company_guid:
         try:
-            # Use explicit tenant/environment companies endpoint for clearer diagnostics
-            companies_url = f"https://api.businesscentral.dynamics.com/v2.0/{TENANT_ID}/api/v2.0/companies"
-            headers_comp = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-            comp_resp = requests.get(companies_url, headers=headers_comp, timeout=30)
-
-            # Log detailed response for troubleshooting
-            try:
-                app.logger.info(f"Companies response (status): {comp_resp.status_code}")
-                app.logger.info(f"Companies response (body): {comp_resp.json()}")
-            except Exception:
-                print("Companies response (text):", comp_resp.text)
-
+            companies_url = f"{bc_base()}/api/v2.0/companies"
+            comp_resp = requests.get(companies_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
             if comp_resp.ok:
                 comp_json = comp_resp.json()
                 comp_list = comp_json.get("value") if isinstance(comp_json, dict) else comp_json
@@ -177,9 +159,9 @@ def post_request_to_bc(bom_data):
                         first = comp_list[0]
                         company_guid = first.get("id")
             else:
-                app.logger.error(f"Failed to list companies: {comp_resp.status_code} {comp_resp.text}")
+                print(f"Failed to list companies: {comp_resp.status_code} {comp_resp.text}")
         except Exception as exc:
-            app.logger.error(f"Error resolving company GUID: {str(exc)}")
+            print(f"Error resolving company GUID: {str(exc)}")
 
     if not company_guid:
         return {"status": "error", "message": "Could not resolve Business Central company GUID. Set BC_COMPANY_GUID or BC_COMPANY_NAME in environment."}
@@ -226,8 +208,6 @@ def post_request_to_bc(bom_data):
 
         try:
             # send the batch
-            batch_num = (count // 99) + 1
-            app.logger.info(f"[INFO] Posting batch {batch_num} ({len(payload)} items) to BC...")
             resp = requests.post(
                 bc_batch_url(),
                 headers=headers,
@@ -235,16 +215,13 @@ def post_request_to_bc(bom_data):
                 timeout=60
             )
 
-            app.logger.info(f"[INFO] ✓ Batch {batch_num} response status: {resp.status_code}")
+            print(f"Batch response status: {resp.status_code}")
             batch_results.append({
-                "batch_number": batch_num,
+                "batch_number": (count // 99) + 1,
                 "status_code": resp.status_code,
                 "response": resp.text
             })
-            if resp.ok:
-                app.logger.info(f"[SUCCESS] ✓ Batch {batch_num} accepted by BC API")
-            else:
-                app.logger.warning(f"[WARNING] Batch {batch_num} response: {resp.text[:200]}")
+            print(f"Batch {(count // 99) + 1} response: {resp.text[:500]}")  # Print first 500 chars for debugging
 
             # If batch succeeded, attempt to trigger BC-side processing once via BOM Import API
             try:
@@ -270,21 +247,20 @@ def post_request_to_bc(bom_data):
                     if created_id is not None:
                         action_url = bc_bomimports_action_url(created_id)
                         action_resp = requests.post(action_url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, timeout=30)
-                        app.logger.info(f"[INFO] ✓ Triggered BC Process action on BOM Import record {created_id}")
-                        app.logger.info(f"[INFO] BC Processing status: {action_resp.status_code}")
+                        print(f"Triggered BC processing action, status: {action_resp.status_code}")
                         batch_results[-1]["process_action_status"] = action_resp.status_code
                     else:
-                        app.logger.warning(f"Could not determine created dummy record ID from response")
+                        print("Could not determine created dummy record ID from response")
                         batch_results[-1]["process_action_status"] = "no-id"
                 else:
-                    app.logger.error(f"Failed to create dummy record for processing: {create_resp.status_code} {create_resp.text}")
+                    print(f"Failed to create dummy record for processing: {create_resp.status_code} {create_resp.text}")
                     batch_results[-1]["process_action_status"] = f"create-failed-{create_resp.status_code}"
             except Exception as exc:
-                app.logger.error(f"Error triggering BC processing action: {str(exc)}")
+                print(f"Error triggering BC processing action: {str(exc)}")
                 batch_results[-1]["process_action_status"] = f"error-{str(exc)}"
 
         except Exception as exc:
-            app.logger.error(f"Error sending batch {(count // 99) + 1}: {str(exc)}")
+            print(f"Error sending batch {(count // 99) + 1}: {str(exc)}")
             batch_results.append({
                 "batch_number": (count // 99) + 1,
                 "status": "error",
@@ -337,74 +313,15 @@ def upload_to_bc():
         if len(bom_data) == 0:
             return jsonify({"error": "BOM data is empty"}), 400
         
-        app.logger.info(f"{'='*70}")
-        app.logger.info(f"[SUCCESS] Upload request received from frontend")
-        app.logger.info(f"[INFO] Total items to upload: {len(bom_data)}")
-        app.logger.info(f"{'='*70}")
-        for i, item in enumerate(bom_data[:3]):  # Log first 3 items as sample
-            app.logger.info(f"  Item {i+1}: Parent={item.get('PARENT PART NUMBER', 'N/A')}, Component={item.get('COMPONENT PART NUMBER', 'N/A')}, Qty={item.get('QTY', 'N/A')}")
-        if len(bom_data) > 3:
-            app.logger.info(f"  ... and {len(bom_data) - 3} more items")
-        app.logger.info(f"[INFO] Posting to Business Central...")
+        print(f"\n=== Uploading {len(bom_data)} items to Business Central ===")
         result = post_request_to_bc(bom_data)
-        
-        if result["status"] == "success":
-            app.logger.info(f"{'='*70}")
-            app.logger.info(f"[SUCCESS] ✓ All batches posted successfully to Business Central!")
-            app.logger.info(f"[INFO] Total batches sent: {result.get('batches_sent', 'N/A')}")
-            app.logger.info(f"[INFO] Total items processed: {result.get('total_items', 'N/A')}")
-            app.logger.info(f"{'='*70}")
-        else:
-            app.logger.error(f"{'='*70}")
-            app.logger.error(f"[ERROR] ✗ Upload failed: {result.get('message', 'Unknown error')}")
-            app.logger.error(f"{'='*70}")
         
         return jsonify(result), 200 if result["status"] == "success" else 500
         
     except Exception as exc:
-        app.logger.error(f"Error in upload_to_bc: {str(exc)}")
-        return jsonify({"status": "error", "message": str(exc)}), 500
-
-
-@app.route("/api/debug/token", methods=["GET"])
-def debug_token():
-    """Attempt to request an access token and return diagnostic info.
-
-    WARNING: does not return client secret, but will show token endpoint
-    response body (which may contain error descriptions useful for debugging).
-    """
-    try:
-        # Hard-coded credentials
-        CLIENT_ID = "21e698d9-1eab-42be-beb7-76096e1af3db"
-        CLIENT_SECRET = "5MN8Q~nVFMWB9ImKBDslluO66eDj8u.WzHSMEdc~"
-        TENANT_ID = "697d6604-5c29-4ca0-9dea-9db421a85492"
-
-        if not CLIENT_ID or not CLIENT_SECRET or not TENANT_ID:
-            return jsonify({"status": "error", "message": "Missing BC_CLIENT_ID/BC_CLIENT_SECRET/BC_TENANT_ID in environment."}), 400
-
-        TOKEN_URL = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-        token_data = {
-            "grant_type": "client_credentials",
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "scope": "https://api.businesscentral.dynamics.com/.default"
-        }
-
-        resp = requests.post(TOKEN_URL, data=token_data, timeout=15)
-        try:
-            body = resp.json()
-        except Exception:
-            body = resp.text
-
-        return jsonify({"status_code": resp.status_code, "body": body}), 200 if resp.ok else 500
-    except Exception as exc:
+        print(f"Error in upload_to_bc: {str(exc)}")
         return jsonify({"status": "error", "message": str(exc)}), 500
 
 
 if __name__ == "__main__":
-    # Allow overriding the port via BACKEND_PORT environment variable
-    try:
-        port = int(os.environ.get("BACKEND_PORT", "5000"))
-    except Exception:
-        port = 5000
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -8,6 +8,25 @@ from bom_service import parse_bom_excel
 app = Flask(__name__)
 CORS(app)
 
+# Business Central configuration from environment (override for new sandbox)
+BC_TENANT_ID = os.environ.get("BC_TENANT_ID", "697d6604-5c29-4ca0-9dea-9db421a85492")
+BC_ENVIRONMENT = os.environ.get("BC_ENVIRONMENT", "CKIN01_UAT_131224")
+BC_COMPANY_GUID = os.environ.get("BC_COMPANY_GUID")
+BC_COMPANY_NAME = os.environ.get("BC_COMPANY_NAME")
+BC_API_HOST = os.environ.get("BC_API_HOST", "https://api.businesscentral.dynamics.com")
+
+# helpers to build API endpoints
+def bc_base():
+    return f"{BC_API_HOST}/v2.0/{BC_TENANT_ID}/{BC_ENVIRONMENT}"
+
+def bc_batch_url():
+    return f"{bc_base()}/api/ck/integration/v2.0/$batch"
+
+def bc_create_bomimports_url():
+    return f"{bc_base()}/api/ck/integration/v1.0/bomImports"
+
+def bc_bomimports_action_url(created_id):
+    return f"{bc_base()}/api/ck/integration/v1.0/bomImports({created_id})/Process"
 
 @app.route("/api/health", methods=["GET"])
 def health():
@@ -88,10 +107,18 @@ def post_request_to_bc(bom_data):
     Returns:
         Dictionary with response status and details
     """
-    # Credentials
-    CLIENT_ID = "21e698d9-1eab-42be-beb7-76096e1af3db"
-    CLIENT_SECRET = "waJ8Q~KQ5XQV0k7WFzXGyMmAjEy9XW_w6OhGWcdR"
-    TENANT_ID = "697d6604-5c29-4ca0-9dea-9db421a85492"
+    # Credentials: prefer environment variables; fall back to hardcoded test values if missing
+    # WARNING: The defaults below are for local testing only. Do NOT commit real secrets.
+    CLIENT_ID = os.environ.get("BC_CLIENT_ID", "c3bfac0f-d6fe-4b1a-a621-065686d1c7f6")
+    CLIENT_SECRET = os.environ.get("BC_CLIENT_SECRET", "5MN8Q~nVFMWB9lmKBDslluO66eDj8u.WzHSMEdc~")
+    TENANT_ID = os.environ.get("BC_TENANT_ID", BC_TENANT_ID)
+
+    if not all([CLIENT_ID, CLIENT_SECRET, TENANT_ID]):
+        return {
+            "status": "error",
+            "message": "Missing Business Central credentials. Set BC_CLIENT_ID, BC_CLIENT_SECRET, BC_TENANT_ID in the environment."
+        }
+
     TOKEN_URL = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
 
     token_data = {
@@ -109,6 +136,35 @@ def post_request_to_bc(bom_data):
     except Exception as exc:
         print(f"Failed to get access token: {str(exc)}")
         return {"status": "error", "message": f"Token request failed: {str(exc)}"}
+
+    # Resolve company GUID if not provided
+    company_guid = BC_COMPANY_GUID
+    if not company_guid:
+        try:
+            companies_url = f"{bc_base()}/api/v2.0/companies"
+            comp_resp = requests.get(companies_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+            if comp_resp.ok:
+                comp_json = comp_resp.json()
+                comp_list = comp_json.get("value") if isinstance(comp_json, dict) else comp_json
+                if isinstance(comp_list, list) and len(comp_list) > 0:
+                    # try to match by BC_COMPANY_NAME if provided
+                    if BC_COMPANY_NAME:
+                        for c in comp_list:
+                            name = c.get("displayName") or c.get("name")
+                            if name and BC_COMPANY_NAME.lower() in name.lower():
+                                company_guid = c.get("id")
+                                break
+                    if not company_guid:
+                        # fallback to first company
+                        first = comp_list[0]
+                        company_guid = first.get("id")
+            else:
+                print(f"Failed to list companies: {comp_resp.status_code} {comp_resp.text}")
+        except Exception as exc:
+            print(f"Error resolving company GUID: {str(exc)}")
+
+    if not company_guid:
+        return {"status": "error", "message": "Could not resolve Business Central company GUID. Set BC_COMPANY_GUID or BC_COMPANY_NAME in environment."}
 
     # Headers for the batch request
     headers = {
@@ -138,7 +194,7 @@ def post_request_to_bc(bom_data):
             dictionary = {
                 "method": "POST",
                 "id": str(i + 1),  # unique ID per request in the batch
-                "url": "companies(AED5BD5F-977B-ED11-9989-6045BD0CAE02)/bomEntries7", # CHANGE URL
+                "url": f"companies({company_guid})/bomEntries7",
                 "headers": {
                     "Content-Type": "application/json"
                 },
@@ -153,7 +209,7 @@ def post_request_to_bc(bom_data):
         try:
             # send the batch
             resp = requests.post(
-                "https://api.businesscentral.dynamics.com/v2.0/697d6604-5c29-4ca0-9dea-9db421a85492/CKIN01_UAT_131224/api/ck/integration/v2.0/$batch",
+                bc_batch_url(),
                 headers=headers,
                 json=itembody,
                 timeout=60
@@ -166,6 +222,42 @@ def post_request_to_bc(bom_data):
                 "response": resp.text
             })
             print(f"Batch {(count // 99) + 1} response: {resp.text[:500]}")  # Print first 500 chars for debugging
+
+            # If batch succeeded, attempt to trigger BC-side processing once via BOM Import API
+            try:
+                # Create a dummy record in the BOM Dummy Load Table to operate on
+                create_resp = requests.post(
+                    bc_create_bomimports_url(),
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json={"JsonPayload": "trigger"},
+                    timeout=30
+                )
+                if create_resp.ok:
+                    j = None
+                    try:
+                        j = create_resp.json()
+                    except Exception:
+                        j = None
+
+                    # Determine created ID (field name may be 'id' or 'ID')
+                    created_id = None
+                    if isinstance(j, dict):
+                        created_id = j.get("id") or j.get("ID") or j.get("Id")
+
+                    if created_id is not None:
+                        action_url = bc_bomimports_action_url(created_id)
+                        action_resp = requests.post(action_url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, timeout=30)
+                        print(f"Triggered BC processing action, status: {action_resp.status_code}")
+                        batch_results[-1]["process_action_status"] = action_resp.status_code
+                    else:
+                        print("Could not determine created dummy record ID from response")
+                        batch_results[-1]["process_action_status"] = "no-id"
+                else:
+                    print(f"Failed to create dummy record for processing: {create_resp.status_code} {create_resp.text}")
+                    batch_results[-1]["process_action_status"] = f"create-failed-{create_resp.status_code}"
+            except Exception as exc:
+                print(f"Error triggering BC processing action: {str(exc)}")
+                batch_results[-1]["process_action_status"] = f"error-{str(exc)}"
 
         except Exception as exc:
             print(f"Error sending batch {(count // 99) + 1}: {str(exc)}")

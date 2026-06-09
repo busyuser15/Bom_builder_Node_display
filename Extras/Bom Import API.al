@@ -19,4 +19,23 @@ page 50191 "BOM Import API"
             }
         }
     }
+
+    actions
+    {
+        area(processing)
+        {
+            action(Process)
+            {
+                ApplicationArea = All;
+                Caption = 'Process BOM';
+                trigger OnAction()
+                var
+                    CodeUse: Codeunit "Codeunit Boms";
+                begin
+                    // Run the codeunit once to process staging rows
+                    CodeUse.mainloop();
+                end;
+            }
+        }
+    }
 }

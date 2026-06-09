@@ -78,6 +78,7 @@ table 50180 "BOM Entry Table"
         exists: Boolean;
         CodeUse: codeunit "Codeunit Boms";
     begin
-        CodeUse.mainloop();
+        // Processing moved to an explicit API action to avoid per-row invocation
+        // Call Codeunit Boms.mainloop() via the BOM Import API when ready
     end;
 }

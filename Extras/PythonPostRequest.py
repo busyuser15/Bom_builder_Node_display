@@ -1,12 +1,25 @@
 import requests
 import json
+import os
 
 # ------------------------------
-# 1️⃣ AUTHENTICATION (same as before)
+# 1️⃣ AUTHENTICATION (use environment variables)
 # ------------------------------
-CLIENT_ID = "21e698d9-1eab-42be-beb7-76096e1af3db"
-CLIENT_SECRET = "waJ8Q~KQ5XQV0k7WFzXGyMmAjEy9XW_w6OhGWcdR"
-TENANT_ID = "697d6604-5c29-4ca0-9dea-9db421a85492"
+# Optionally load a local .env if python-dotenv is installed (development only)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+CLIENT_ID = os.environ.get("BC_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("BC_CLIENT_SECRET")
+TENANT_ID = os.environ.get("BC_TENANT_ID")
+if not all([CLIENT_ID, CLIENT_SECRET, TENANT_ID]):
+    raise RuntimeError(
+        "Missing Business Central credentials. Set BC_CLIENT_ID, BC_CLIENT_SECRET, BC_TENANT_ID in environment or a .env file"
+    )
+
 TOKEN_URL = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
 
 token_data = {

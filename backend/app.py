@@ -109,7 +109,7 @@ def post_request_to_bc(bom_data):
     """
     # Hard-coded credentials (for local testing; do NOT commit real secrets)
     CLIENT_ID = "21e698d9-1eab-42be-beb7-76096e1af3db"
-    CLIENT_SECRET = "5MN8Q~nVFMWB9ImKBDslluO66eDj8u.WzHSMEdc~"
+    CLIENT_SECRET = "????"
     TENANT_ID = "697d6604-5c29-4ca0-9dea-9db421a85492"
 
     if not all([CLIENT_ID, CLIENT_SECRET, TENANT_ID]):
